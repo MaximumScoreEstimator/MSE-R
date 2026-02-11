@@ -12,6 +12,13 @@
 #' \code{control} parameter of the function \code{DEoptim::DEoptim}.
 #' See \code{DEoptim::DEoptim.control} for more information.
 #'
+#' @section Sensitivity to parameter choices:
+#' Results can be sensitive to parameter choices: changing the random seed or
+#' optimization settings (e.g. bounds, \code{optimParams}) can lead to
+#' substantially different estimates. We recommend setting a seed, using
+#' \code{permuteInvariant = TRUE}, and \code{numRuns > 1} when stability or
+#' reproducibility matters.
+#'
 #' @param dataArray The output of \code{CdataArray}.
 #' @param bounds A list with elements \code{$lower}, \code{$upper} which are
 #'   vectors defining lower and upper bounds for each variable in the objective

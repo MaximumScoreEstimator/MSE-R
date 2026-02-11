@@ -1,0 +1,107 @@
+---
+title: "Parameter and notation glossary"
+author: "maxscoreest authors"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Parameter and notation glossary}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+This vignette defines parameters, subscripts, and return-value components used in the **maxscoreest** package. Use it when reading function documentation or vignettes to resolve ambiguity.
+
+# Index and dimension conventions
+
+Throughout the package, **market-level** objects (distance matrices, match matrices, inequality members) are indexed by market. Within a market, pairs are indexed by upstream and downstream.
+
+| Term | Meaning | Where it appears |
+|------|--------|-------------------|
+| **mIdx** | Market index, from 1 to `noM`. Identifies a single market. | All market-level lists: `distanceMatrices`, `matchMatrices`, `mate`, `ineqmembers`. |
+| **uIdx** | Upstream index *within* a market (1 to `noU[mIdx]`). Refers to one upstream agent. | Payoff and matching: the "upstream" side of a pair. |
+| **dIdx** | Downstream index *within* a market (1 to `noD[mIdx]`). Refers to one downstream agent. | Payoff and matching: the "downstream" side of a pair. |
+| **ineqIdx** | Inequality index: either within a market (1 to `numIneqs`) or globally (column index in `dataArray`). | `Cineqmembers`, `CdataArray`, `ineqSat`, `groupIDs`. |
+| **paramIdx**, **aIdx**, **k** | Attribute index (1 to `noAttr`). Sometimes used for the *free* parameter index (1 to `noAttr - 1`). | Rows of `dataArray`, distance matrices, components of β. |
+
+**Dimension order:** Arrays use **(attribute, downstream, upstream)** or **(downstream, upstream)** for two-way tables. For example, `distanceMatrices[[mIdx]][attrIdx, dIdx, uIdx]` and `matchMatrices[[mIdx]][dIdx, uIdx]`. R is column-major; see the "Dimension ordering" note in the documentation for `importMatched` and related functions.
+
+# Counts and sizes
+
+| Term | Meaning | Scope |
+|------|--------|--------|
+| **noM** | Number of markets. | Global. |
+| **noU** | Vector of length `noM`: `noU[mIdx]` = number of upstreams in market `mIdx`. | Per market. |
+| **noD** | Vector of length `noM`: `noD[mIdx]` = number of downstreams in market `mIdx`. | Per market. |
+| **noAttr** | Number of distance/attribute dimensions (e.g. number of "Distance" columns in the input). | Global. |
+| **numFreeAttrs**, **d** | `noAttr - 1`. Number of parameters that are actually estimated (the vector β). | Optimization and inference. |
+| **numIneqs** | Number of inequalities in one market; equals n(n−1)/2 when there are n upstreams. | Per market: `ineqmembers[[mIdx]]$numIneqs`. |
+| **sumNumIneqs** | Total number of inequalities (= number of columns of `dataArray`). | Global. |
+| **ssSize** | Subsample size: number of markets drawn per bootstrap/subsample iteration. In `pointIdentifiedCR` you choose it; in `cubeRootBootstrapCR` the method always uses as many markets as in the full data (the `ssSize` argument is ignored). | `pointIdentifiedCR`, `sampleBootstrap`. |
+
+# Parameters and payoff
+
+The payoff for a (market, upstream, downstream) triple is linear in a vector of coefficients. The first coefficient is fixed for scale; the rest are estimated.
+
+| Term | Meaning | Role |
+|------|--------|------|
+| **β (beta)** | Vector of **free** parameters, length `noAttr - 1`. Coefficients of attributes 2, …, noAttr; the first attribute's coefficient is fixed. | What `optimizeScoreFunction` estimates; used in payoff evaluation and bootstrap. |
+| **coefficient1** | First coefficient in the **extended** parameter vector: β̃ = (coefficient1, β). Usually `1` or `-1`. Fixes the scale of the payoff. | `makeScoreObjFun`, `optimizeScoreFunction`, `optimizeBootstrapFunction`. |
+| **β̃ (extended β)** | (coefficient1, β). The full coefficient vector used in the linear payoff. | Internal to the objective and payoff evaluation. |
+| **β̂ (point estimate)** | The estimated β returned by `optimizeScoreFunction`. Used as the center for bootstrap and confidence regions. | Argument `pointEstimate` in the confidence-region functions; `betaEst` in `makeBootstrapObjFun` and `makeHmatrix`. |
+
+# Inequality and matching terminology
+
+Inequalities compare the sum of payoffs in the observed (factual) matches to the sum in a counterfactual where two upstreams swap partners.
+
+| Term | Meaning | Role |
+|------|--------|------|
+| **Factual (fct)** | The observed matches: the left-hand side (LHS) of each inequality (sum of payoffs over current matches). | `fctUpIdxs`, `fctDnIdxs` in `ineqmembers`. |
+| **Counterfactual (cfc)** | The hypothetical "swapped" matches: the right-hand side (RHS) of each inequality. | `cfcUpIdxs`, `cfcDnIdxs` in `ineqmembers`. |
+| **Inequality** | One condition of the form (sum of payoffs on LHS) − (sum on RHS) ≥ 0. Each unordered pair of upstreams (i, j) in a market yields one such inequality. | Each column of `dataArray` corresponds to one inequality; `ineqSat` indicates whether it is satisfied (1) or not (0). |
+| **mate** | Per-market description of who is matched to whom: for each upstream, the list of downstream indices it is matched to. | `importMatched(...)$mate`; input to `Cineqmembers`. |
+| **groupIDs** | Vector of length equal to the number of inequalities: `groupIDs[ineqIdx]` is the market index to which that inequality belongs. | Output of `makeGroupIDs(ineqmembers)`; used in inference to map inequalities to markets. |
+
+# Optimization
+
+| Term | Meaning | Role |
+|------|--------|------|
+| **bounds** | List with `$lower` and `$upper`, each a vector of length `numFreeAttrs`. Box constraints for the parameter vector β. | Created by `makeBounds(noAttr, hi, lo)`; passed to `optimizeScoreFunction`. |
+| **optimParams** | Control arguments for the optimizer (e.g. DEoptim). `getDefaultOptimParams()` returns a reasonable default list. | Passed to `optimizeScoreFunction`. |
+| **permuteInvariant** | If `TRUE`, the package reorders the attribute rows of the data array by increasing standard deviation before optimizing, then maps the solution back to the original order. Can improve numerical behavior. | `optimizeScoreFunction`. |
+| **numRuns** | Number of times to restart the optimization (e.g. multiple DEoptim runs). The best solution(s) are kept in `$bestRuns`. | `optimizeScoreFunction`. |
+| **getIneqSat** | If `TRUE`, the result includes `$ineqSat`: a 0/1 vector indicating which inequalities are satisfied at the solution. | `optimizeScoreFunction`. |
+
+# Inference (confidence regions)
+
+| Term | Meaning | Role |
+|------|--------|------|
+| **pointEstimate** | The vector β̂ from `optimizeScoreFunction`. Used as the center for bootstrap and for building confidence intervals. | Argument to `pointIdentifiedCR` and `cubeRootBootstrapCR`. |
+| **optimizeScoreArgs** | List of arguments for `optimizeScoreFunction` **excluding** `dataArray` (which is set internally). Should include `bounds`, and typically `coefficient1`, `method`, `optimParams`. | `pointIdentifiedCR`, `cubeRootBootstrapCR`. |
+| **numSubsamples** | Number of bootstrap or subsampling iterations. | Both confidence-region functions. |
+| **confidenceLevel** | Nominal coverage, e.g. `0.95` for 95% intervals. | Both confidence-region functions. |
+| **H** | Estimate of the matrix H₀ (Cattaneo et al.). Used in the bootstrap objective B(β). | `cubeRootBootstrapCR`; computed by `makeHmatrix`. |
+| **Hest** | Method to estimate H: `"numder"` (numerical derivative) or `"plugin"` (kernel plug-in). | Option in `cubeRootBootstrapCR`. |
+| **bw** | Bandwidth (for plugin) or step size (for numder) used when estimating H. Can be a scalar (recycled to a matrix), a matrix, or `"rot"` for rule-of-thumb. | Option `options$bw` in `cubeRootBootstrapCR`. |
+| **eps** | Step-size matrix for the numerical derivative of the score (used inside `makeHnumder`). | Internal to H estimation. |
+| **Centered vs uncentered** | *Centered* = bootstrap estimate minus β̂; *uncentered* = raw bootstrap estimate. `$estimates` is centered; `$rawEstimates` is uncentered. | Return value of `cubeRootBootstrapCR`. |
+| **useCorrectionFactor** | If `TRUE`, the bootstrap objective uses the correction factor c = (number of inequalities in sample) / (number in full data). Recommended to leave `TRUE`. | Option in `cubeRootBootstrapCR`. |
+| **makePosDef**, **makePosDefTol** | If the estimated H is not positive semidefinite, correct it: either add a constant to the diagonal (when `makePosDefTol` is a numeric tolerance) or set negative eigenvalues to zero (`makePosDefTol = "drop"`). | Options in `cubeRootBootstrapCR`. |
+
+# Main return-value components
+
+| Term | Meaning | Where |
+|------|--------|--------|
+| **optArg** | Optimal parameter vector (β̂). Length `numFreeAttrs`. | `optimizeScoreFunction`, `optimizeBootstrapFunction`. |
+| **optVal** | Optimal value of the score: fraction of inequalities satisfied, in [0, 1]. | `optimizeScoreFunction`. |
+| **ineqSat** | 0/1 vector of length equal to the number of inequalities: 1 if that inequality is satisfied at `optArg`. | `optimizeScoreFunction` (when `getIneqSat = TRUE`). |
+| **numSat** | Total number of satisfied inequalities (= `optVal` × number of inequalities). | `optimizeScoreFunction`. |
+| **bestRuns** | List of runs that achieved the best `optVal` (possibly multiple runs with the same score but different `optArg`). | `optimizeScoreFunction`. |
+| **cr** | Confidence region: typically a matrix of dimension (2, numFreeAttrs); column k gives [lower, upper] for the k-th parameter. | `pointIdentifiedCR` (`$crSymm`, `$crAsym`); `cubeRootBootstrapCR` (`$cr`). |
+
+# Quick reference: dimension order
+
+- **distanceMatrices[[m]]**: `[attrIdx, dIdx, uIdx]` — attribute, downstream, upstream.
+- **matchMatrices[[m]]**: `[dIdx, uIdx]` — downstream, upstream.
+- **dataArray**: `[paramIdx, ineqIdx]` — first row is the fixed coefficient (attribute 1); remaining rows are attributes 2, …, noAttr; columns are inequalities.
+- **Payoff for (mIdx, uIdx, dIdx)** uses `distanceMatrices[[mIdx]][, dIdx, uIdx]` and β̃ = (coefficient1, β).
+
+For more on the methodology, see the vignettes `matched`, `unmatched`, and `cubeRootBootstrap`.

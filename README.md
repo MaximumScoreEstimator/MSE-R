@@ -69,7 +69,10 @@ or, using the RStudio browser,
 vignette("matched", package = "maxscoreest")
 vignette("unmatched", package = "maxscoreest")
 vignette("cubeRootBootstrap", package = "maxscoreest")
+vignette("glossary", package = "maxscoreest")
 ```
+
+A **parameter and notation glossary** (`vignette("glossary")`) explains the purpose and role of parameters, indices (e.g. `mIdx`, `uIdx`, `dIdx`), and return-value components used throughout the package.
 ## References
 
 - David Santiago and Fox, Jeremy. “A Toolkit for Matching Maximum Score

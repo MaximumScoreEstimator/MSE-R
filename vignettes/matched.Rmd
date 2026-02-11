@@ -17,6 +17,8 @@ knitr::opts_chunk$set(
 
 # A quick example
 
+For parameter and index definitions (e.g. `mIdx`, `noAttr`, `dataArray`), see `vignette("glossary", package = "maxscoreest")`.
+
 ```{r setup}
 library(maxscoreest)
 ```
@@ -149,6 +151,8 @@ optResult$optVal
 calcPerMarketStats(optResult$ineqSat, makeGroupIDs(ineqmembers))
 ```
 
+A full runnable script for this workflow is available as a workbook; see the README (Workbook templates).
+
 # Calculating the confidence intervals
 
 Now that we have an optimal solution for the parameters, we can use it to
@@ -214,7 +218,7 @@ crCubeRoot <- cubeRootBootstrapCR(
     optimizeScoreArgs)
 ```
 
-See the vignette *Calculating confidence regions using the cube-root bootstrap method* (accessed by `vignettes("cubeRootBootstrap"`) for more details on this method.
+See the vignette *Calculating confidence regions using the cube-root bootstrap method* (accessed by `vignette("cubeRootBootstrap", package = "maxscoreest")`) for more details on this method.
 
 # Taking a closer look
 

@@ -57,6 +57,8 @@ print(optResult$optVal)
 print(calcPerMarketStats(optResult$ineqSat, makeGroupIDs(ineqmembers)))
 ```
 
+Results can be sensitive to parameter choices: changing the random seed or optimization settings (e.g. bounds, `optimParams`) can lead to substantially different estimates. We recommend setting a seed, using `permuteInvariant = TRUE`, and `numRuns > 1` when stability or reproducibility matters.
+
 For an in-depth look, you can read the vignettes provided with the package:
 
 ```r

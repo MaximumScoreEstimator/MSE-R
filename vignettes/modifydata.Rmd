@@ -1,0 +1,374 @@
+---
+title: "Modifying markets: unmatching, removing, and rematching agents"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Modifying markets: unmatching, removing, and rematching agents}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Introduction
+
+After importing a matched dataset and (optionally) estimating the parameters,
+you may want to **edit** one or more markets: break a specific match, remove
+an agent altogether, and possibly re-solve the assignment problem afterwards.
+The `modifydata` helpers provide a small, composable interface for doing this.
+
+This is the R counterpart of the Mathematica `modifydata.m` module. Because R
+passes data by value, the helpers operate on an explicit **market state list**
+rather than on a fixed set of globals. The state is just the list returned by
+`importMatched()`, optionally augmented with per-market quota vectors and
+(for rematching) evaluated payoff matrices.
+
+The functions covered in this vignette are:
+
+| Function | Role |
+| --- | --- |
+| `storeState`, `restoreState` | Deep-copy snapshots of the state |
+| `mateFromMatchMatrix`, `mateFromMatchMatrices` | Rebuild a mate `data.table` from a match matrix |
+| `quotaFromMatchMatrix`, `addQuotasFromMatches` | Derive per-agent match counts |
+| `modifyMarket` | Main editor — unmatch, remove, and/or rematch a single market |
+| `removeUpstreams`, `removeDownstreams`, `removeStreams` | Lightweight slicing helpers |
+
+## Setup
+
+```{r setup}
+library(maxscoreest)
+```
+
+We use the small synthetic dataset shipped with the package
+(`precomp_proof.dat`, three markets) so the matrices are short enough to print
+in full.
+
+```{r}
+filename <- system.file("extdata", "precomp_proof.dat", package = "maxscoreest")
+state <- importMatched(filename)
+```
+
+```{r}
+state$noM
+state$noU
+state$noD
+state$noAttr
+```
+
+We have three markets with `(noU, noD) = (3, 2), (2, 3), (4, 4)` and three
+distance attributes. Let's look at the initial match matrix for market 3:
+
+```{r}
+state$matchMatrices[[3]]
+```
+
+The convention used throughout the package is `matchMatrices[[m]][d, u]` —
+rows are downstream agents, columns are upstream agents. The matrix above
+shows for example that in market 3, upstream 1 is matched with downstreams 1
+and 2.
+
+## A quick example
+
+Suppose we want to unmatch the pair (upstream 1, downstream 1) in market 3,
+and see the resulting market state.
+
+```{r}
+s <- modifyMarket(state, m = 3, u = 1L, d = 1L,
+                  unmatch = TRUE, remove = FALSE)
+s$matchMatrices[[3]]
+```
+
+The cell `[1, 1]` flipped from 1 to 0. The original `state` is unchanged:
+
+```{r}
+state$matchMatrices[[3]][1, 1]
+```
+
+This is the most important convention to remember: **`modifyMarket` and the
+convenience helpers always return a new state and never mutate the caller's
+data**, including the reference-typed `mate` `data.table` objects.
+
+## Adding quotas to the state
+
+`modifyMarket` can update or use per-market quota vectors, but these aren't
+part of the value returned by `importMatched()`. The helper
+`addQuotasFromMatches()` derives them from the current match matrices (column
+sums for upstreams, row sums for downstreams):
+
+```{r}
+state <- addQuotasFromMatches(state)
+state$quotasU
+state$quotasD
+```
+
+These are needed whenever you set any `quotaUpdate*`, `quotaReset`, or
+`rematch` flag (the function errors with a clear message if you forget).
+
+## Operation 1: unmatching specific pairs
+
+Unmatching means clearing one or more `(d, u)` cells of the match matrix
+without removing any agents. Pass aligned vectors `u` and `d` of equal length:
+
+```{r}
+s <- modifyMarket(state, m = 3, u = c(1L, 4L), d = c(2L, 4L),
+                  unmatch = TRUE, remove = FALSE)
+state$matchMatrices[[3]]    # before
+s$matchMatrices[[3]]        # after: [2, 1] and [4, 4] are now 0
+```
+
+The mate table is automatically rebuilt so it stays consistent with the new
+match matrix:
+
+```{r}
+s$mate[[3]]
+```
+
+A warning is emitted if you try to unmatch a pair that was already
+unmatched — the operation still proceeds (it's a no-op in that case), but the
+warning helps catch mis-specified inputs.
+
+### Updating quotas on unmatch
+
+By default, an unmatch does **not** touch the quota vectors. Setting
+`quotaUpdateUpstream = TRUE` and/or `quotaUpdateDownstream = TRUE` recomputes
+the corresponding side from the new match matrix:
+
+```{r}
+s <- modifyMarket(state, m = 3, u = 1L, d = 1L,
+                  unmatch = TRUE, remove = FALSE,
+                  quotaUpdateUpstream = TRUE,
+                  quotaUpdateDownstream = TRUE)
+state$quotasU[[3]]   # initial quotas
+s$quotasU[[3]]       # upstream 1 lost a match
+state$quotasD[[3]]
+s$quotasD[[3]]       # downstream 1 lost a match
+```
+
+## Operation 2: removing agents
+
+The `remove` mode actually takes upstreams and/or downstreams **out** of the
+market. There are two variants, controlled by `quotaReset`.
+
+### Slicing mode (`quotaReset = FALSE`, the default)
+
+This drops the listed rows and columns from every per-market array
+(`distanceMatrices`, `matchMatrices`, `payoffMatrices`, quotas) and
+decrements `noU[m]` / `noD[m]`. The remaining agents are **renumbered**
+consecutively from 1.
+
+```{r}
+s <- modifyMarket(state, m = 3, u = c(1L, 3L),
+                  remove = TRUE, quotaReset = FALSE)
+state$noU
+s$noU
+dim(state$matchMatrices[[3]])
+dim(s$matchMatrices[[3]])
+```
+
+What was upstream 2 in the original market is now in column 1, and what was
+upstream 4 is in column 2:
+
+```{r}
+s$matchMatrices[[3]]
+```
+
+You can also remove downstreams in the same call:
+
+```{r}
+s <- modifyMarket(state, m = 3, u = 1L, d = 4L,
+                  remove = TRUE, quotaReset = FALSE)
+dim(s$matchMatrices[[3]])
+```
+
+### Quota-reset mode (`quotaReset = TRUE`)
+
+Sometimes you want the agents to **stay in the market** but become inactive —
+e.g. so you can rematch around them without changing the indexing of any
+other variables. `quotaReset = TRUE` zeros their quotas and zeros their
+row/column of the match matrix, but leaves all other shapes unchanged.
+
+```{r}
+s <- modifyMarket(state, m = 3, u = c(1L, 3L),
+                  remove = TRUE, quotaReset = TRUE)
+dim(s$matchMatrices[[3]])    # same as before
+s$matchMatrices[[3]]         # columns 1 and 3 are zeroed
+s$quotasU[[3]]               # corresponding quotas are 0
+```
+
+### Cascading quotas with `quotaUpdate`
+
+In either remove mode, `quotaUpdate = TRUE` additionally decrements the
+**opposite** stream's quotas to reflect the removed matches. For example, if
+the agents you remove were participating in real matches, their downstream
+partners now have "free" slots that the rematch step can re-fill.
+
+```{r}
+s <- modifyMarket(state, m = 3, u = 1L,
+                  remove = TRUE, quotaReset = TRUE, quotaUpdate = TRUE)
+state$quotasD[[3]]   # initial downstream quotas in market 3
+s$quotasD[[3]]       # decremented at d=1 and d=2 (upstream 1's mates)
+```
+
+## Operation 3: rematching
+
+After breaking or removing matches you typically want to re-solve the
+assignment problem for the affected market. `rematch = TRUE` does exactly
+this by calling `generateAssignmentMatrix()` under the hood.
+
+Rematching requires evaluated payoff matrices in the state. The
+`precomp_proof.dat` file used so far has *symbolic* distance attribute
+values (`d1111`, `d1112`, ...) — convenient for showing structure, but the
+payoff cannot be evaluated on them. We'll switch to `precomp_testdata.dat`,
+which is a bundled dataset with numeric attributes, for the remaining
+examples.
+
+```{r}
+filename2 <- system.file("extdata", "precomp_testdata.dat", package = "maxscoreest")
+state2 <- addQuotasFromMatches(importMatched(filename2))
+state2$noM
+state2$noU
+state2$noAttr
+```
+
+Compute the payoff matrices for some chosen β (its length must equal
+`noAttr - 1`):
+
+```{r}
+beta <- c(0.5, 1.0, -0.25, 0.3)
+state2$payoffMatrices <- evaluatePayoffMatrices(state2$distanceMatrices, beta)
+```
+
+Now combine a removal with a rematch in one call:
+
+```{r}
+s <- modifyMarket(state2, m = 1, u = 1L,
+                  remove = TRUE, quotaReset = TRUE,
+                  quotaUpdate = TRUE, rematch = TRUE)
+```
+
+The rematched matrix respects the (decremented) quotas — column 1 is all
+zeros because upstream 1's quota was reset to 0, and column/row sums never
+exceed `quotasU[[m]]` / `quotasD[[m]]`:
+
+```{r}
+all(s$matchMatrices[[1]][, 1] == 0)
+all(colSums(s$matchMatrices[[1]]) <= s$quotasU[[1]])
+all(rowSums(s$matchMatrices[[1]]) <= s$quotasD[[1]])
+```
+
+The mate table is regenerated to match.
+
+You can also rematch without any prior modification, e.g. to see what the
+estimated β would predict if the market started from scratch:
+
+```{r}
+s <- modifyMarket(state2, m = 1, remove = FALSE, rematch = TRUE)
+all(colSums(s$matchMatrices[[1]]) <= s$quotasU[[1]])
+```
+
+## Convenience helpers
+
+For the common case of "just slice these agents out", the three small
+helpers `removeUpstreams`, `removeDownstreams`, and `removeStreams` are more
+concise than the full `modifyMarket` call and accept an additional
+`updateMatchMatrix` flag.
+
+```{r}
+s <- removeUpstreams(state, m = 1, u = c(1L, 2L))
+s$noU
+dim(s$matchMatrices[[1]])
+```
+
+```{r}
+s <- removeDownstreams(state, m = 3, d = c(2L, 4L))
+s$noD
+dim(s$matchMatrices[[3]])
+```
+
+```{r}
+s <- removeStreams(state, m = 3, u = 1L, d = 1L)
+s$noU
+s$noD
+```
+
+`updateMatchMatrix = FALSE` slices `distanceMatrices` and the quota vector
+but leaves the match matrix and mate untouched. This is useful in the
+"precomputed distances" workflow described in the Mathematica module, where
+the match matrix is not actively maintained:
+
+```{r}
+s <- removeUpstreams(state, m = 3, u = 1L, updateMatchMatrix = FALSE)
+dim(s$distanceMatrices[[3]])    # sliced
+dim(s$matchMatrices[[3]])       # NOT sliced — caller must rebuild later
+```
+
+## Snapshots
+
+`storeState()` returns a deep copy of the state list, including the mate
+`data.table` objects (which carry reference semantics in R and would otherwise
+be aliased). `restoreState()` is the symmetric operation — useful when you
+want to perform several speculative `modifyMarket` calls from a known
+checkpoint without re-reading the file each time.
+
+```{r}
+snapshot <- storeState(state)
+
+s1 <- modifyMarket(state, m = 3, u = 1L, d = 1L,
+                   unmatch = TRUE, remove = FALSE)
+s2 <- modifyMarket(restoreState(snapshot), m = 3, u = 2L,
+                   remove = TRUE, quotaReset = FALSE)
+
+s1$matchMatrices[[3]][1, 1]   # 0
+s2$noU[3]                     # 3
+```
+
+In practice, since `modifyMarket` itself snapshots its input before any
+modification, you only need explicit `storeState`/`restoreState` if you plan
+to mutate the state outside the package's API (for example by editing a list
+member directly).
+
+## Helpers for rebuilding mate and quota structures
+
+The two low-level helpers used by `modifyMarket` are also exposed because
+they're useful on their own.
+
+`mateFromMatchMatrix()` is the R analogue of Mathematica's `Cmate`. It
+rebuilds the mate `data.table` (with columns `UpStream` and `DownMates`) from
+a 0/1 match matrix:
+
+```{r}
+mateFromMatchMatrix(state$matchMatrices[[3]])
+```
+
+`quotaFromMatchMatrix()` is the analogue of Mathematica's `Cquota`. It
+returns the per-agent match counts as a list:
+
+```{r}
+quotaFromMatchMatrix(state$matchMatrices[[3]])
+```
+
+`addQuotasFromMatches()` (shown earlier) is just a list-wide convenience
+layer over `quotaFromMatchMatrix()` that adds the `$quotasU` and `$quotasD`
+members to a state.
+
+## Correspondence with the Mathematica `modifydata.m`
+
+| Mathematica | R |
+| --- | --- |
+| `store[var]` / `restore[var]` | `storeState(state)` / `restoreState(snap)` |
+| `modify[m, u, d, <\|...\|>]` | `modifyMarket(state, m, u, d, ...)` |
+| `removeU[m, u, match]` | `removeUpstreams(state, m, u, updateMatchMatrix)` |
+| `removeD[m, d, match]` | `removeDownstreams(state, m, d, updateMatchMatrix)` |
+| `removeUD[m, u, d, match]` | `removeStreams(state, m, u, d, updateMatchMatrix)` |
+| `Cmate[matchMatrix]` (in matching.m) | `mateFromMatchMatrix(matchMatrix)` |
+| `Cquota[matchMatrix]` (in matching.m) | `quotaFromMatchMatrix(matchMatrix)` |
+
+The package's test suite includes a `[parity #1..#6]` group that reproduces
+the six Mathematica unmatch-mode tests from
+`MSE-Mathematica/testing/modify.testdata` verbatim and compares
+`matchMatrix`, `mate`, and `quota` against the exact expected values from the
+Mathematica test data file.

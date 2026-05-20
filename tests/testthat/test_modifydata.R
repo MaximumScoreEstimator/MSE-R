@@ -526,3 +526,138 @@ test_that("integration: modify+rematch on bundled precomp_testdata", {
     # The mate table is consistent with the rebuilt match matrix.
     expectMateEqual(s$mate[[1]], mateFromMatchMatrix(s$matchMatrices[[1]]))
 })
+
+# ============================================================================
+# Parity tests against MSE-Mathematica/testing/modify.testdata
+#
+# These mirror the six unmatch-mode cases in the Mathematica test data file.
+# Each Mathematica `tests[i]` association is reproduced with the same flags,
+# and `matchMatrix` / `mate` / `quota` are checked against the exact expected
+# values from `modify.testdata` (transposed where needed to convert M's
+# upstream-first arrays into R's downstream-first arrays).
+#
+# All six tests operate on `precomp_proof.dat`, which is shipped in
+# `inst/extdata` and is the .dat equivalent of the `precomp_proof.xlsx` used
+# by the Mathematica test runner.
+# ============================================================================
+
+# Convert a Mathematica matchMatrix entry (a list of row vectors, indexed
+# upstream-by-downstream) into the R downstream-by-upstream layout.
+mmFromMathematicaLayout <- function(uByD) {
+    t(do.call(rbind, lapply(uByD, as.integer)))
+}
+
+# Shared expected match matrices (identical across all 6 M tests — only
+# quotas differ between cases).
+expectedMM_parity <- list(
+    mmFromMathematicaLayout(list(c(0, 0), c(0, 1), c(1, 1))),
+    mmFromMathematicaLayout(list(c(0, 1, 0), c(0, 1, 0))),
+    mmFromMathematicaLayout(list(
+        c(0, 1, 0, 0), c(1, 0, 1, 1),
+        c(1, 0, 1, 0), c(1, 1, 1, 1))))
+
+# Shared expected mate tables, translated from the Mathematica nested lists.
+expectedMate_parity <- list(
+    data.table::setkey(data.table::data.table(
+        UpStream  = 1:3,
+        DownMates = list(integer(0), 2L, c(1L, 2L))),
+        UpStream),
+    data.table::setkey(data.table::data.table(
+        UpStream  = 1:2,
+        DownMates = list(2L, 2L)),
+        UpStream),
+    data.table::setkey(data.table::data.table(
+        UpStream  = 1:4,
+        DownMates = list(2L, c(1L, 3L, 4L),
+                         c(1L, 3L), c(1L, 2L, 3L, 4L))),
+        UpStream))
+
+# Build the initial state for the parity tests.
+loadProofState <- function() {
+    filename <- system.file("extdata", "precomp_proof.dat",
+                            package = "maxscoreest")
+    addQuotasFromMatches(importMatched(filename))
+}
+
+# Check all per-market invariants for the unmatch tests.
+expectModifyResultParity <- function(state, expQuotasU3, expQuotasD3) {
+    for (m in 1:3) {
+        testthat::expect_equal(state$matchMatrices[[m]], expectedMM_parity[[m]])
+        expectMateEqual(state$mate[[m]], expectedMate_parity[[m]])
+    }
+    # m1 and m2 are never modified across any of the 6 cases — their quotas
+    # equal the values produced by the initial Cquota call in Mathematica.
+    testthat::expect_equal(state$quotasU[[1]], c(0L, 1L, 2L))
+    testthat::expect_equal(state$quotasU[[2]], c(1L, 1L))
+    testthat::expect_equal(state$quotasD[[1]], c(1L, 2L))
+    testthat::expect_equal(state$quotasD[[2]], c(0L, 2L, 0L))
+    # m3 quotas vary per test.
+    testthat::expect_equal(state$quotasU[[3]], expQuotasU3)
+    testthat::expect_equal(state$quotasD[[3]], expQuotasD3)
+}
+
+test_that("[parity #1] unmatch one pair, update both quotas", {
+    # Mathematica:
+    #   modify[3, {1}, {1}, <|"unmatch" -> True,
+    #                          "quota_update_upstream"   -> True,
+    #                          "quota_update_downstream" -> True|>]
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE,
+                      quotaUpdateUpstream   = TRUE,
+                      quotaUpdateDownstream = TRUE)
+    expectModifyResultParity(s, c(1L, 3L, 2L, 4L), c(3L, 2L, 3L, 2L))
+})
+
+test_that("[parity #2] unmatch one pair, update upstream quota only", {
+    # Mathematica:
+    #   modify[3, {1}, {1}, <|"unmatch" -> True,
+    #                          "quota_update_upstream"   -> True,
+    #                          "quota_update_downstream" -> False|>]
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE,
+                      quotaUpdateUpstream   = TRUE,
+                      quotaUpdateDownstream = FALSE)
+    expectModifyResultParity(s, c(1L, 3L, 2L, 4L), c(4L, 2L, 3L, 2L))
+})
+
+test_that("[parity #3] unmatch one pair, update downstream quota only", {
+    # Mathematica:
+    #   modify[3, {1}, {1}, <|"unmatch" -> True,
+    #                          "quota_update_upstream"   -> False,
+    #                          "quota_update_downstream" -> True|>]
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE,
+                      quotaUpdateUpstream   = FALSE,
+                      quotaUpdateDownstream = TRUE)
+    expectModifyResultParity(s, c(2L, 3L, 2L, 4L), c(3L, 2L, 3L, 2L))
+})
+
+test_that("[parity #4] unmatch one pair, upstream quota only (brief form)", {
+    # Mathematica (brief — only the True key is passed in the association):
+    #   modify[3, {1}, {1}, <|"unmatch" -> True,
+    #                          "quota_update_upstream" -> True|>]
+    # In R, omitting `quotaUpdateDownstream` falls back to its FALSE default.
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE,
+                      quotaUpdateUpstream = TRUE)
+    expectModifyResultParity(s, c(1L, 3L, 2L, 4L), c(4L, 2L, 3L, 2L))
+})
+
+test_that("[parity #5] unmatch one pair, downstream quota only (brief form)", {
+    # Mathematica:
+    #   modify[3, {1}, {1}, <|"unmatch" -> True,
+    #                          "quota_update_downstream" -> True|>]
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE,
+                      quotaUpdateDownstream = TRUE)
+    expectModifyResultParity(s, c(2L, 3L, 2L, 4L), c(3L, 2L, 3L, 2L))
+})
+
+test_that("[parity #6] unmatch one pair, no quota update", {
+    # Mathematica:
+    #   modify[3, {1}, {1}, <|"unmatch" -> True|>]
+    # With neither quota_update flag set, quotas are unchanged.
+    s <- modifyMarket(loadProofState(), m = 3, u = 1L, d = 1L,
+                      unmatch = TRUE, remove = FALSE)
+    expectModifyResultParity(s, c(2L, 3L, 2L, 4L), c(4L, 2L, 3L, 2L))
+})
